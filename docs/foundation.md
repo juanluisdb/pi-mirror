@@ -108,6 +108,27 @@ The design direction from the Pi references is consistent:
 
 This made Pi a better fit than trying to invent a fresh agent kernel from scratch.
 
+## Pi Version Baseline
+
+`pi-mirror` should pin to a specific Pi version early instead of floating across a fast-moving API surface.
+
+Current target:
+
+- Pi v0.66.0
+
+Why this matters:
+
+- Pi package APIs are still evolving
+- the pi-book material used during design aligns with v0.66.0
+- OpenClaw's integration notes show that signature mismatches between Pi layers are real enough to require adapter code
+
+Practical guidance:
+
+- pin Pi packages explicitly
+- record the target version in ADRs and package manifests
+- treat Pi upgrades as intentional maintenance work, not as background dependency drift
+- prefer integration seams that rely on documented SDK surfaces or tool `XOperations` interfaces over deeper internals
+
 ## Pi Findings That Shaped The Design
 
 ### 1. Pi Is Layered On Purpose
@@ -151,6 +172,18 @@ However, some tools still assume local execution details in practice:
 
 This led to the recommendation that the host should own the real tool contract and only expose stable logical tool names to Pi.
 
+Important nuance:
+
+- Pi's `XOperations` hooks are strong enough to support a fast-path implementation where tool behavior is routed into a sandbox or VM without inventing every tool from scratch
+- that is a useful implementation shortcut
+- it is not, by itself, the product architecture
+
+In other words:
+
+- `XOperations` can power the first executor backend
+- `Executor`, `Workspace`, `Profile`, and `Policy` remain the product concepts
+- backend-specific nouns such as `gondolin`, `nono`, worktrees, or shadow overlays should not become the main user-facing vocabulary
+
 ### 4. Pi Extensions Are Strong Enough For Policy Hooks
 
 Pi's extension system can:
@@ -165,13 +198,34 @@ That means we do not need to fork Pi to implement policy, approval, or extra too
 
 ### 5. Pi Session Semantics Matter
 
-Pi's session model is richer than "just a chat log." That matters for future profile handoffs, session branching, and eventual multi-profile coordination.
+Pi's session model is richer than "just a chat log." It is tree-structured, not simply linear. That matters for future profile handoffs, session branching, and eventual multi-profile coordination.
 
 This influenced several decisions:
 
 - profile should be fixed at session start
 - escalation should be explicit
 - handoff should eventually be a first-class concept rather than a silent permission change in the middle of a session
+
+Important notes for implementation:
+
+- session history should preserve Pi's tree semantics rather than flatten them into a linear transcript abstraction
+- future audit/event records should be able to reference session entry ids or branch-aware identifiers
+- workspace state does not need to branch with the session tree in v1, but if it does not, that limitation should be documented explicitly
+
+### 6. Compaction And Long Sessions Are A First-Class Runtime Concern
+
+Compaction is not an optional optimization. For a long-running personal agent, it is part of normal operation.
+
+This influenced the design in two ways:
+
+- Pi's built-in compaction support is one more reason to embed Pi instead of inventing a runtime
+- `pi-mirror` should eventually preserve workspace-aware context during compaction, especially current task, modified paths, and important session decisions
+
+Working direction:
+
+- enable Pi auto-compaction early
+- keep compaction instructions additive instead of replacing Pi's prompt/runtime defaults
+- defer more advanced context-guard or automatic handoff flows until after the core runtime is stable
 
 ## Core Design Decisions
 
@@ -216,9 +270,9 @@ Reason:
 - easier to audit
 - clearer mental model
 
-### 3. Development Uses Docker; Production Should Use A VM-Class Boundary
+### 3. Default Development Path Uses Docker; A Faster VM-Backed Path Is Also Acceptable
 
-Current plan:
+Default plan:
 
 - local development: Docker-backed executor
 - later home-server deployment: VM-class execution boundary
@@ -228,6 +282,18 @@ Reason:
 - Docker is fast and convenient for local iteration
 - plain containers are not trusted enough as the only security boundary for internet-enabled arbitrary code execution on a personal home server
 - the execution backend should be replaceable, so this can be an implementation migration rather than an architectural rewrite
+
+However, there is an explicitly acceptable fast path:
+
+- use Pi tool `XOperations` plus a VM-backed sandbox such as `gondolin` from the first execution-capable release
+- optionally add `nono` as an outer defense-in-depth layer around the host Pi process
+
+This is a valid tradeoff if and only if:
+
+- the product still talks in terms of executor/workspace/profile/policy
+- the config does not become "gondolin config" or "nono config"
+- backend-specific mechanics such as worktrees, shadow copies, or VM mount paths remain implementation details
+- a later split from one package into two would be mostly implementation movement rather than a rewrite of product concepts
 
 ### 4. Named Workspaces Instead Of Raw Paths
 
@@ -551,12 +617,13 @@ This is safer and cleaner than one broad "master agent."
 pi-mirror/
   apps/
     dev-cli/
-  packages/
-    core/
-    config/
-    policy/
-    executor-docker/
-    pi-runtime/
+      src/
+        domain/
+        config/
+        workspaces/
+        policy/
+        runtime/
+        execution/
   docs/
     adr/
   config/
@@ -568,7 +635,16 @@ pi-mirror/
     secrets/
 ```
 
-## Package Responsibilities
+This shape is intentionally conceptual as well as physical.
+
+Important guidance:
+
+- the logical boundaries matter more than the exact TypeScript package count on day 1
+- it is acceptable to start with fewer implementation modules or one heavier package if dependency direction remains clear
+- it is also acceptable to split execution concerns later, for example from one local execution package into separate executor and sandbox adapters
+- what should not be compromised is the long-lived vocabulary and authority boundaries
+
+## Implementation Modules
 
 ### `apps/dev-cli`
 
@@ -578,7 +654,7 @@ Local developer entrypoint for:
 - launching a session
 - running sync approval flows during development
 
-### `packages/core`
+### `apps/dev-cli/src/domain`
 
 Shared domain concepts and interfaces:
 
@@ -588,7 +664,7 @@ Shared domain concepts and interfaces:
 - approval request and decision types
 - normalized action types used internally by policy
 
-### `packages/config`
+### `apps/dev-cli/src/config`
 
 Loading and validating instance config such as:
 
@@ -602,7 +678,15 @@ This package should own:
 - default merging
 - resolution of instance-relative paths
 
-### `packages/policy`
+### `apps/dev-cli/src/workspaces`
+
+Workspace resolution and mapping:
+
+- workspace ids to resolved host paths
+- workspace kind and access semantics
+- session-visible workspace selection
+
+### `apps/dev-cli/src/policy`
 
 Policy evaluation and guardrails:
 
@@ -612,16 +696,18 @@ Policy evaluation and guardrails:
 - approval requests
 - path and workspace-kind restrictions
 
-### `packages/executor-docker`
+### `apps/dev-cli/src/execution`
 
-Development executor backend using Docker.
+Execution backend implementations and adapters.
 
-This package should be treated as:
+This module should be treated as:
 
 - a backend implementation
 - not the canonical security model for production
 
-### `packages/pi-runtime`
+If the faster `XOperations` + `gondolin` path is chosen, it belongs here as well. The important point is that it remains a backend implementation, not the definition of the product architecture.
+
+### `apps/dev-cli/src/runtime`
 
 Pi embedding plus host-owned tool registration.
 
@@ -631,6 +717,21 @@ Important rule:
 - the host owns what those tools actually do
 
 This package is where the design should prevent local filesystem assumptions from leaking directly into the product.
+
+### Extraction Triggers
+
+These modules do not need to become separate packages immediately.
+
+Good reasons to extract later:
+
+- `config` needs to be reused by another app or tested in isolation with its own lifecycle
+- `execution` grows multiple backends or a heavier dependency surface
+- `policy` becomes complex enough to justify an independent contract and dedicated test ergonomics
+- `runtime` needs to be reused by another entrypoint beyond `dev-cli`
+
+Bad reason to extract:
+
+- the names look package-like on paper
 
 ## Draft Interface Sketches
 
@@ -713,7 +814,13 @@ export interface ResolvedSessionContext {
 
 ### Executor
 
-The executor is the key long-lived seam. It must not leak Docker-specific details into the rest of the application.
+The executor is the key long-lived seam. It must not leak Docker-specific details, VM-specific details, or Pi-internal implementation choices into the rest of the application.
+
+Important nuance:
+
+- this seam may be implemented directly as a public interface
+- or it may initially exist as a thinner internal adapter layer over Pi tool `XOperations`
+- either is acceptable as long as the rest of the application still depends on executor-like behavior instead of backend-specific nouns
 
 ```ts
 export interface CommandSpec {
@@ -986,6 +1093,37 @@ The important design rule is:
 
 - policy should not depend on terminal UI directly
 
+## Session Tree Model
+
+Pi sessions should be treated as tree-structured from the beginning, even if the first CLI only exposes a simple linear interaction flow.
+
+Implications:
+
+- rewinding and branching are part of the underlying runtime model
+- future handoff flows can build on parent/child session semantics instead of inventing a parallel abstraction
+- audit and diagnostics should not assume a single linear transcript index forever
+
+Known v1 simplification:
+
+- workspace state may remain shared across session branches
+- if that is the case, "last write wins" across branches must be documented as a known limitation rather than treated as surprising behavior
+
+## Compaction And Context Strategy
+
+Long sessions should be treated as a normal operating mode.
+
+Near-term guidance:
+
+- enable Pi auto-compaction early
+- preserve additive instructions around current task, modified workspace paths, and key decisions
+- keep any overflow detection or context-guard logic lightweight at first
+
+Deferred for later:
+
+- automatic branch/handoff when context usage crosses a threshold
+- richer compaction summaries tied to audit/event history
+- profile-aware or channel-aware context management policies
+
 ## OpenClaw Comparison And Validation
 
 OpenClaw is not the target architecture for `pi-mirror`, but its docs were still useful for validation because it is one of the more serious examples of Pi used as an embedded runtime inside a larger product shell.
@@ -1053,11 +1191,17 @@ OpenClaw did not change the core plan. It mostly strengthened it:
 
 ### Development Sandbox
 
-Development uses Docker because:
+Development can start with Docker because:
 
 - it is fast to bootstrap
 - it is good enough for local iteration
 - it helps validate the executor boundary early
+
+It is also acceptable to skip straight to a VM-backed local sandbox if:
+
+- doing so materially accelerates implementation
+- the backend remains behind the same product boundaries
+- the team is explicit that this is a backend choice, not the new user-facing model
 
 ### Production Sandbox Direction
 
@@ -1084,6 +1228,14 @@ The intended migration path is:
 2. implement `executor-docker` for development
 3. keep runtime code Docker-agnostic
 4. later implement a VM-backed production executor
+
+There is also a sanctioned shortcut path:
+
+1. define the executor boundary first
+2. implement a first backend using Pi `XOperations` routed into a VM-backed sandbox such as `gondolin`
+3. optionally add `nono` as host-side defense in depth
+4. keep product config and policy backend-agnostic
+5. split implementation modules later if execution concerns deserve their own packages
 
 This should be manageable if:
 
@@ -1148,7 +1300,7 @@ Mitigation:
 - named workspaces
 - profiles
 - development CLI
-- Docker-backed dev executor
+- a local execution backend for development, with Docker as the default path and a VM-backed fast path explicitly allowed
 - hard guardrails around writable surfaces
 - synchronous approvals in local terminal
 - durable local instance directory
@@ -1168,7 +1320,7 @@ Mitigation:
 ### Phase 0: Foundation
 
 - create the repo
-- create the package layout
+- create the initial app and module layout
 - write the foundation document
 - write the first ADRs
 
@@ -1187,7 +1339,7 @@ Mitigation:
 
 ### Phase 3: Local Dev Execution
 
-- implement Docker-backed development executor
+- implement the first local execution backend
 - support sync terminal approvals
 - support instance-local data and config
 
@@ -1228,7 +1380,7 @@ Deliverables:
 - directory scaffold
 - foundation document
 - first ADR set
-- package skeletons
+- app skeleton with logical modules
 
 Exit criteria:
 
@@ -1287,7 +1439,7 @@ Why this release matters:
 - validates hard guardrails
 - gets to useful non-shell agent behavior quickly
 
-### Release 3: Docker Executor For Development
+### Release 3: Local Execution Backend
 
 Goal:
 
@@ -1296,7 +1448,7 @@ Goal:
 
 Deliverables:
 
-- `executor-docker` implementation
+- first execution backend implementation
 - `bash` tool wired through the executor
 - coding profile with shell access
 - sync terminal approvals for risky shell actions
@@ -1306,6 +1458,11 @@ Why this release matters:
 - validates the most important long-term boundary
 - gives an actually useful coding-agent development loop
 - keeps the production isolation choice open
+
+Acceptable implementation variant:
+
+- instead of Docker, Release 3 can ship with a VM-backed local execution backend built through Pi `XOperations` and custom tools where needed
+- if that happens, the same release goals still apply: preserve boundaries, keep config/product concepts stable, and avoid backend-specific nouns leaking upward
 
 ### Release 4: Hardening And Operator Quality
 
@@ -1374,13 +1531,13 @@ Later releases can add:
 If implementation starts right away, the recommended order is:
 
 1. write ADRs from this foundation
-2. define shared interfaces in `packages/core`
-3. define config schema and loader in `packages/config`
+2. define shared interfaces in `apps/dev-cli/src/domain`
+3. define config schema and loader in `apps/dev-cli/src/config`
 4. implement workspace registry
-5. implement read-only tool wiring in `packages/pi-runtime`
+5. implement read-only tool wiring in `apps/dev-cli/src/runtime`
 6. build `apps/dev-cli` for launching a session with the default profile
 7. add structured write tools for staging
-8. only then add Docker executor and shell support
+8. only then add the first local execution backend and shell support
 
 This sequencing keeps the early releases useful while validating the right seams first.
 
@@ -1391,10 +1548,12 @@ These are intentionally unresolved. They should be treated as follow-up design w
 ### Unresolved But Not Blocking Release 1
 
 - which VM-backed executor to adopt first for production deployment
+- whether the first execution-capable release should take the Docker path or the sanctioned `XOperations` + VM-backed fast path
 - how much network policy to enforce at the executor level in v1 versus later
 - what minimal audit trail is worth building in the first implementation
 - how far to go with rule expressions before the config becomes too complex
 - whether the first production deployment should use one durable VM executor or truly ephemeral execution units
+- how much session-tree awareness the first audit and diagnostics layer should carry
 
 ### Additional Follow-Up Topics To Revisit
 
@@ -1403,6 +1562,8 @@ These are intentionally unresolved. They should be treated as follow-up design w
 - memory and persistence design:
   exactly what Pi stores directly versus what `pi-mirror` stores for audit, search, and operations
 - backup and restore design for `.instance`
+- Pi upgrade strategy:
+  version pinning is decided, but the compatibility test and upgrade cadence are still to be defined
 - release acceptance criteria:
   how to define "done" for Release 1 through Release 3 in a way a coding agent can execute against
 
@@ -1420,6 +1581,12 @@ These are intentionally unresolved. They should be treated as follow-up design w
   [https://www.anthropic.com/engineering/managed-agents](https://www.anthropic.com/engineering/managed-agents)
 - Pi SDK docs
   [https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/sdk.md](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/sdk.md)
+- OpenClaw Pi guide
+  [https://docs.openclaw.ai/pi](https://docs.openclaw.ai/pi)
+- OpenClaw RPC reference
+  [https://docs.openclaw.ai/reference/rpc](https://docs.openclaw.ai/reference/rpc)
+- OpenClaw CLI reference
+  [https://docs.openclaw.ai/cli](https://docs.openclaw.ai/cli)
 - Pi tools index
   [https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/tools/index.ts](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/tools/index.ts)
 - Pi built-in tool implementations:
@@ -1441,6 +1608,10 @@ These are intentionally unresolved. They should be treated as follow-up design w
 - Docker AI sandboxes docs
   [https://docs.docker.com/ai/sandboxes/](https://docs.docker.com/ai/sandboxes/)
   [https://docs.docker.com/ai/sandboxes/architecture/](https://docs.docker.com/ai/sandboxes/architecture/)
+- Gondolin
+  [https://github.com/earendil-works/gondolin](https://github.com/earendil-works/gondolin)
+- Nono
+  [https://github.com/always-further/nono](https://github.com/always-further/nono)
 
 ### Local References Read
 
@@ -1453,6 +1624,7 @@ These are intentionally unresolved. They should be treated as follow-up design w
   [ch28-mom-slack.md](/Users/user/code/pi-book/src/ch28-mom-slack.md)
   [ch32-boundaries.md](/Users/user/code/pi-book/src/ch32-boundaries.md)
   [ch03-reading-map.md](/Users/user/code/pi-book/src/ch03-reading-map.md)
+  [ch08-agent-loop.md](/Users/user/code/pi-book/src/ch08-agent-loop.md)
 
 ### Ecosystem References Reviewed
 
@@ -1460,6 +1632,8 @@ These are intentionally unresolved. They should be treated as follow-up design w
   [README.md](/tmp/awesome-pi-agent/README.md)
 - Concrete security extension example
   [https://github.com/michalvavra/agents/blob/main/agents/pi/extensions/security.ts](https://github.com/michalvavra/agents/blob/main/agents/pi/extensions/security.ts)
+- Pi handoff extension
+  [https://github.com/ogulcanolk/pi-handoff](https://github.com/ogulcanolk/pi-handoff)
 
 Important ecosystem notes:
 
@@ -1496,7 +1670,7 @@ After that, define the minimal TypeScript interfaces for:
 For handoff to a fresh coding agent, the recommended execution order is:
 
 1. write the ADRs in the order listed above
-2. create type definitions in `packages/core` that reflect those ADRs
-3. implement config parsing and validation in `packages/config`
+2. create type definitions in `apps/dev-cli/src/domain` that reflect those ADRs
+3. implement config parsing and validation in `apps/dev-cli/src/config`
 4. implement the workspace registry and session resolution
 5. wire a read-only Pi runtime before adding writes or shell support
