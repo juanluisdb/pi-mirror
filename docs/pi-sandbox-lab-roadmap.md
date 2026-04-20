@@ -4,6 +4,25 @@ This is a learning challenge before committing more implementation to `pi-mirror
 
 The goal is to learn enough about Pi, TypeScript, RPC, tools, and Gondolin to make better architecture decisions later. This is intentionally not the product implementation.
 
+## How To Use This Roadmap
+
+The easiest way to use this is to move from top to bottom, but stop early if one milestone already taught you something important.
+
+Recommended approach:
+
+- Start with Milestone 0 and 1 to get comfortable with TypeScript and the lab setup.
+- Do Milestone 2 before adding any tools.
+- Only touch sandboxing and Gondolin after you have Pi sessions and a custom tool working.
+- Keep short notes after each milestone about what felt easy, what felt surprising, and what still feels fuzzy.
+- If you get stuck, ask for a hint on the smallest blocking step instead of skipping ahead.
+
+What you are not trying to do yet:
+
+- design the final `pi-mirror` product
+- optimize for production-grade architecture
+- solve every backend choice up front
+- build a polished CLI or UX
+
 ## Rules Of The Challenge
 
 - Build a disposable experiment, not production code.
@@ -42,6 +61,24 @@ experiments/
 
 This keeps the learning work visible without making it part of `apps/dev-cli`.
 
+## Reference Map
+
+When you want to look up the real materials, start here:
+
+- Pi SDK docs: https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/sdk.md
+- Pi tool index: https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/tools/index.ts
+- Pi tutorial: https://gist.githubusercontent.com/dabit3/e97dbfe71298b1df4d36542aceb5f158/raw/213be5313e8e74470eb40333944bc829e2f6df5f/pi_tutorial.md
+- Gondolin repo: https://github.com/earendil-works/gondolin
+- TypeScript handbook: https://www.typescriptlang.org/docs/
+- Node API docs: https://nodejs.org/api/
+- Vitest docs: https://vitest.dev/guide/
+
+How to use these links:
+
+- read the overview first
+- then inspect the smallest source or example that matches the concept you are learning
+- prefer examples that show the shape of a thing, not just its marketing description
+
 ## Learning Outcomes
 
 By the end, you should be able to answer:
@@ -61,6 +98,22 @@ By the end, you should be able to answer:
 Goal:
 
 - Create a tiny TypeScript project for experiments.
+
+What this milestone is really teaching you:
+
+- how a Node + pnpm + TypeScript project is put together
+- how to run tests and a dev script
+- where the first files usually live
+- how much configuration you need before Pi enters the picture
+
+Initial steps:
+
+- create the experiment directory and make it separate from `apps/dev-cli`
+- initialize a small `package.json`
+- add a TypeScript entrypoint under `src/`
+- add one test file under `test/`
+- add scripts for `dev`, `test`, and `typecheck`
+- keep the implementation tiny enough that you can read every file in one sitting
 
 You are done when:
 
@@ -83,6 +136,7 @@ Hints:
 - Make the first test embarrassingly small.
 - Learn what `tsconfig.json` does before changing many options.
 - Keep the lab package private.
+- If module or import errors appear, treat them as tooling lessons, not as signs that you are bad at the language.
 
 Reflection prompts:
 
@@ -95,6 +149,14 @@ Reflection prompts:
 Goal:
 
 - Get comfortable with TypeScript by writing small utilities that resemble future `pi-mirror` concepts.
+
+What this milestone is really teaching you:
+
+- the difference between runtime values and compile-time types
+- how object shapes work
+- how to write functions that are small enough to test well
+- how to use literal unions instead of overengineering enums
+- how to spot where runtime validation is still needed
 
 Suggested exercises:
 
@@ -121,6 +183,8 @@ Hints:
 - TypeScript does not exist at runtime.
 - Path safety is a runtime concern, not just a type concern.
 - Tests are a good way to learn the edge cases without overdesigning.
+- Use this milestone to notice where the compiler is helpful and where it is silent.
+- Prefer a small working function plus a test over a clever abstraction.
 
 Reflection prompts:
 
@@ -133,6 +197,33 @@ Reflection prompts:
 Goal:
 
 - Start one Pi session from TypeScript and print a response.
+
+What this milestone is really teaching you:
+
+- what Pi owns versus what the host script owns
+- how session creation feels in practice
+- which setup pieces are configuration, auth, or model selection
+- how much ceremony Pi needs before a first useful response
+
+Pi session shape, conceptually:
+
+```ts
+// Pseudocode only: the exact method names depend on the Pi SDK version.
+async function main() {
+  const session = await createAgentSession({
+    /* model, auth, storage, settings */
+  });
+
+  const reply = await session.send("Say hello in one sentence.");
+  console.log(reply);
+}
+```
+
+The important part here is not the exact API name. The important part is learning the split between:
+
+- host-owned setup
+- Pi-owned session lifecycle
+- the message or prompt that starts the conversation
 
 You are done when:
 
@@ -153,6 +244,8 @@ Hints:
 - Look for the smallest first-party example of `createAgentSession`.
 - Keep session storage local to the lab.
 - Print enough lifecycle information to understand what is happening.
+- Start without tools so you can see the bare session lifecycle first.
+- If you are unsure what a setting does, write down the name and move on rather than freezing on configuration.
 
 Reflection prompts:
 
@@ -165,6 +258,36 @@ Reflection prompts:
 Goal:
 
 - Learn the Pi tool-call flow with a harmless custom tool.
+
+What this milestone is really teaching you:
+
+- how Pi asks for tools
+- what a tool signature needs to look like
+- how arguments are validated or rejected
+- how the agent reacts to tool success and tool failure
+
+Custom tool shape, conceptually:
+
+```ts
+// Pseudocode only: treat this as a shape, not a final API.
+const tools = [
+  {
+    name: "get_lab_time",
+    description: "Return the current ISO time.",
+    inputSchema: {},
+    execute: async () => {
+      return { time: new Date().toISOString() };
+    },
+  },
+];
+```
+
+The useful questions here are:
+
+- Where do tool names live?
+- Where does input validation happen?
+- What does the tool return?
+- What happens when the tool fails?
 
 Suggested tool ideas:
 
@@ -190,6 +313,8 @@ Hints:
 - Choose a tool so boring that the only hard part is Pi integration.
 - Log tool inputs and outputs during the experiment.
 - Make one intentional tool error and observe what Pi does.
+- Keep the tool output small and predictable.
+- Aim for one success path and one failure path, not a full utility library.
 
 Reflection prompts:
 
@@ -203,6 +328,13 @@ Reflection prompts:
 Goal:
 
 - Give the agent read-only access to a fake workspace.
+
+What this milestone is really teaching you:
+
+- how path scoping works
+- where to enforce safety
+- what the model can see versus what the host controls
+- how read-only access feels before writes are allowed
 
 Suggested toy workspace:
 
@@ -238,6 +370,7 @@ Hints:
 - Implement and test the underlying functions before exposing them as Pi tools.
 - Treat path traversal as part of the exercise.
 - Keep the tool names intentionally simple.
+- Make it obvious in logs when the agent is inside versus outside the toy workspace.
 
 Reflection prompts:
 
@@ -250,6 +383,13 @@ Reflection prompts:
 Goal:
 
 - Add controlled writing to a scratch area inside the toy workspace.
+
+What this milestone is really teaching you:
+
+- what a hard guardrail feels like in practice
+- how denial should behave
+- why writes need stronger policy than reads
+- how quickly the system becomes less trustworthy if writes are too broad
 
 Suggested rule:
 
@@ -274,6 +414,7 @@ Hints:
 - Start with one write operation.
 - Make denial messages clear.
 - Do not rely on prompting as the enforcement mechanism.
+- If the write rule feels too rigid, that is useful feedback, not a failure.
 
 Reflection prompts:
 
@@ -286,6 +427,13 @@ Reflection prompts:
 Goal:
 
 - Learn Gondolin lifecycle separately from Pi.
+
+What this milestone is really teaching you:
+
+- how a sandbox starts and stops
+- what it means to mount a workspace into an isolated environment
+- what the sandbox can see by default
+- what gets easier or harder once execution is isolated
 
 You are done when:
 
@@ -307,6 +455,7 @@ Hints:
 - Print the sandbox-visible paths.
 - Check what happens when a command fails.
 - Check whether common binaries you expect are available.
+- Treat this as a sandbox operator exercise, not an agent exercise.
 
 Reflection prompts:
 
@@ -320,6 +469,12 @@ Reflection prompts:
 Goal:
 
 - Make Pi read the toy workspace through the sandbox rather than directly from the host.
+
+What this milestone is really teaching you:
+
+- how much adapter code Pi needs when the filesystem is no longer local
+- whether Pi tool wiring stays simple or starts getting awkward
+- what it means to keep host paths out of the model's mental picture
 
 You are done when:
 
@@ -338,6 +493,8 @@ Hints:
 - Keep a tiny adapter between Pi tools and the sandbox.
 - Compare direct-host read tools with sandbox-backed read tools.
 - Pay attention to path translation.
+- If the adapter feels thin, that is a good sign.
+- If it becomes sprawling, write down why.
 
 Reflection prompts:
 
@@ -350,6 +507,12 @@ Reflection prompts:
 Goal:
 
 - Understand which Pi/file tools are easy to redirect and which ones are awkward.
+
+What this milestone is really teaching you:
+
+- which tools naturally belong in the host
+- which tools leak implementation assumptions
+- whether you want a structured search tool or a shell-based search path later
 
 You are done when:
 
@@ -367,6 +530,7 @@ Hints:
 - Inspect Pi's tool source near the operation hooks.
 - Compare how `find` and `grep` are implemented.
 - Ask: where does the actual file traversal happen?
+- Focus on the shape of the integration problem, not on making search perfect.
 
 Reflection prompts:
 
@@ -379,6 +543,12 @@ Reflection prompts:
 Goal:
 
 - Give the agent a tiny shell capability inside the sandbox and observe the risks.
+
+What this milestone is really teaching you:
+
+- what happens when structured tools are not enough
+- what kind of commands the model reaches for
+- how hard it is to separate "useful shell" from "dangerous shell"
 
 You are done when:
 
@@ -398,6 +568,7 @@ Hints:
 - Start with explicit allowed commands before trying risk classification.
 - Keep timeouts short.
 - Observe how often the model reaches for shell when structured tools exist.
+- You are trying to learn the pressure points, not to design perfect permissions.
 
 Reflection prompts:
 
@@ -411,6 +582,12 @@ Reflection prompts:
 Goal:
 
 - Understand what Pi RPC is good for by building the smallest possible contrast with SDK embedding.
+
+What this milestone is really teaching you:
+
+- what changes when the host and session are in separate processes
+- what becomes easier if another language or controller owns the Pi session
+- whether RPC is a better fit for your future than embedded SDK use
 
 You are done when:
 
@@ -429,6 +606,7 @@ Hints:
 - Compare control flow, not features.
 - Ask what process owns the session.
 - Ask what becomes easier for non-Node hosts.
+- Keep your notes focused on tradeoffs, not on feature count.
 
 Reflection prompts:
 
